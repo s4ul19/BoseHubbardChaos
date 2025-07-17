@@ -1,10 +1,17 @@
 (* ::Package:: *)
 
 BeginPackage["MatrixComponent`"]
-Basis::usage="N=Numero de Atomos, M=Numero de casillas";
-hamiltonianBH::usage="Parametros, en orden (Numero de atomos, numero de sitios, J,U)";
-DeepHamiltonianBH::usage="Parametros, en orden (Numero de atomos, numero de sitios, J,U)"
-
+Basis::usage="Basis[n_,m_]\nGenera la Base de Fock de una configuracion unidimensional de n=NumeroDeParticulas y m=NumeroDeSitios sitios";
+hamiltonianBH::usage="hamiltonianBH[NumeroDeParticulas_,NumeroDeSitios_,ConstanteCinetica_,ConstanteInteraccion_]\n Crea el Hamiltoniano de BoseHubbard unidimensional, segun una l\[OAcute]gica de primeros vecinos.";
+DeepHamiltonianBH::usage="M\[AAcute]s optimo que hamiltonianBH\nDeepHamiltonianBH[NumeroDeParticulas_,NumeroDeSitios_,ConstanteCinetica_,ConstanteInteraccion_]\n Crea el Hamiltoniano de BoseHubbard unidimensional, segun una l\[OAcute]gica de primeros vecinos"
+CreateArray::usage="CreateArray[position_,values_]\nCrea Sparsearray segun una lista de posiciones y una lista de valores.\nLos objetos de la lista de posiciones deben ser de la forma {i,j}, i y j enteros\n position[[i]] le correspende values[[i]]. "
+EigenInfo::usage="EigenInfo[sparse_]\n Se le pasa un SparseArray y retorna la informacion sobre sus Eigenvectores (Primera entrada) y sobre sus respectivos eigenvalores (Segunda entrada)."
+UnitarySparse::usage="UnitarySparse[OldBase_,NewBase_]\nDada dos bases de un mismo espacio vectorial, retorna la matriz de cambio de base."
+SplitSymmetricBasis::usage="SplitSymmetricBasis[basis_]\n Retorna un Diccionario de la base sim\[EAcute]trica asociada a la base dada.\n Mediante SplitSymmetricBasis[''Symmetric''] se obtiene los elementos sim\[EAcute]tricos y con SplitSymmetricBasis[''Antisymmetric''] los elementos antisim\[EAcute]tricos."
+ParityRepresentationHamiltonian::usage="ParityRepresentationHamiltonian[n_,m_,J_,U_]\n Retorna la representacion sectorizada bajo la simetr\[IAcute]a de paridad del hamiltoniano de BoseHubbard."
+SymmetricSectorHamiltonian::usage="SymmetricSectorHamiltonian[n_,m_,J_,U_,sector_]\nRetorna el sector sim\[EAcute]trico con sector=''Symmetric''\n Retorna el sector antisim\[EAcute]trico con sector=''Antisymmetric''\n Hamiltoniano de Bose Hubbard "
+KLevelSpacing::usage="KLevelSpacing[list_,order_]"
+CreateHistogram::usage="CreateHistogram[list_]\nCrea histograma PDF seg\[UAcute]n una lista de datos."
 Begin["`Private`"]
 
 listaBase[v_,n_]:=Table[If[i==1,v,0],{i,n}]; 
@@ -111,8 +118,57 @@ H2=SparseArray[Band[{1,1}]->diag,{len,len}];
 
 
 
+CreateArray[pos_,val_]:=Module[{Asoc=AssociationThread[pos,N[val]]//Normal,n=Max[Flatten[pos]]},SparseArray[Asoc,{n,n}]]
+
+EigenInfo[sparse_]:=Module[{eigensys=Eigensystem[N[sparse]]},Transpose[{Normalize/@eigensys[[2]],eigensys[[1]]}]]
+
+UnitarySparse[basis1_,basis2_]:=Module[{EA=basis1,EB=basis2,n=Length[basis1]},If[Length[EA]!=Length[EB],Message[UnitarySparse::bdim];
+Return[$Failed];];
+SparseArray[Outer[Dot,N[EB],N[EA],1]]]
+
+
+
+SplitSymmetricBasis[list_]:=Module[{basis=list,symPairs,palindromes,symMap,antiMap,palMap},palindromes=Select[basis,#===Reverse[#]&];
+palMap=Map[{#,#,1,0}&,palindromes];
+symPairs=DeleteDuplicatesBy[Select[basis,#=!=Reverse[#]&],Sort[{#,Reverse[#]}]&];
+symMap=Map[Function[{v},With[{w=Reverse[v]},If[OrderedQ[{v,w}],{v,w,1./Sqrt[2],1./Sqrt[2]},{w,v,1./Sqrt[2],1./Sqrt[2]}]]],symPairs];
+antiMap=Map[Function[{v},With[{w=Reverse[v]},If[OrderedQ[{v,w}],{v,w,1./Sqrt[2],-1./Sqrt[2]},{w,v,1./Sqrt[2],-1./Sqrt[2]}]]],symPairs];
+<|"Symmetric"->Join[palMap,symMap],"Antisymmetric"->antiMap|>]
+
+ScaledCanonicalVectorij[i_,j_,vali_,valj_,dim_]:=Module[{id=ConstantArray[0,dim]},id[[i]]+=vali;
+If[i!=j,id[[j]]+=valj];
+id]
+
+ParityRepresentationHamiltonian[n_,m_,J_,U_]:=Module[{H,B,len,assoc,SymmetricBasis,PartSymmetric,PartAntisymmetric,Entries,EntriesPartTotal,NewBasis,U1,mat,threshold,NewH1},H=DeepHamiltonianBH[n,m,J,U];
+B=Basis[n,m];
+len=Length[B];
+SymmetricBasis=SplitSymmetricBasis[B];
+PartSymmetric=SymmetricBasis["Symmetric"];
+PartAntisymmetric=SymmetricBasis["Antisymmetric"];
+assoc=AssociationThread[B,Range[len]];
+Entries=Join[PartSymmetric,PartAntisymmetric];
+EntriesPartTotal=Entries/. {a_,b_,x_,y_}:>{{assoc[a],assoc[b]},x,y};
+NewBasis=Table[ScaledCanonicalVectorij[#1,#2,#3,#4,len]&@@{EntriesPartTotal[[i,1,1]],EntriesPartTotal[[i,1,2]],EntriesPartTotal[[i,2]],EntriesPartTotal[[i,3]]},{i,1,Length[EntriesPartTotal]}];
+U1=SparseArray[NewBasis];
+mat=U1 . H . Transpose[U1];
+NewH1=Chop[mat,10^-10]  (*Usar Chop con tolerancia adecuada*)]
+
+SymmetricSectorHamiltonian[n_,m_,J_,U_,sector_]:=Module[{Horig,B,len,assoc,SymmetricBasis,entries,newBasis,U1,Hsec},Horig=DeepHamiltonianBH[n,m,J,U];(*Hamiltoniano en base original*)B=Basis[n,m];
+len=Length[B];
+assoc=AssociationThread[B->Range[len]];
+SymmetricBasis=SplitSymmetricBasis[B];
+(*Seleccionar solo el sector deseado*)entries=SymmetricBasis[sector]/. {a_,b_,x_,y_}:>{{assoc[a],assoc[b]},x,y};
+(*Construir base para el sector*)newBasis=Table[Module[{i1=e[[1,1]],i2=e[[1,2]],x=e[[2]],y=e[[3]]},ScaledCanonicalVectorij[i1,i2,x,y,len]],{e,entries}];
+U1=SparseArray[newBasis];(*Matriz unitaria del sector*)Hsec=U1 . Horig . Transpose[U1];(*Hamiltoniano reducido*)Chop[Hsec,10^-10]  (*Eliminar componentes peque\[NTilde]as*)]
+
+
+
+
+CreateHistogram[list_]:=Histogram[list,{Min[list],Max[list],(2*InterquartileRange[list])/(n^(1/3))},"PDF"]
+KLevelSpacing[list_,order_]:=Module[{k=order,Sortedlist=Sort[list],n=Length[list]},
+Table[(Sortedlist[[i+2*k]]-Sortedlist[[i+k]])/(Sortedlist[[i+k]]-Sortedlist[[i]]),{i,1,n-2*k}]]
+
+
 End[]
 EndPackage[]
-
-
 
